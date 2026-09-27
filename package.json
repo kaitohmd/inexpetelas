@@ -1,0 +1,17 @@
+{
+  "name": "inexpetelas",
+  "version": "0.3.0",
+  "description": "Compartilhamento de tela privado para amigos",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "server": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "electron": "^38.2.0"
+  }
+}
