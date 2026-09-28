@@ -4,7 +4,7 @@ Aplicativo privado para Windows com uma sala fixa de até 8 pessoas. Cada pessoa
 
 ## Abrir
 
-Execute `INEXPETELAS-Setup-0.4.0.exe`, escolha a pasta e conclua a instalação. O instalador inclui o Electron, cria atalhos e permite desinstalar pelo Windows. Seus amigos não precisam instalar Node.js. A abertura mostra uma tela de carregamento de cerca de 5 segundos.
+Baixe o instalador mais recente na página Releases do GitHub, execute e conclua a instalação. O instalador inclui o Electron, cria atalhos e permite desinstalar pelo Windows. Seus amigos não precisam instalar Node.js. O próprio app verifica versões ao abrir, baixa atualizações e mostra o progresso numa janela INEXPETELAS.
 
 Para gerar o instalador a partir do código no Windows: `npm ci` e `npm run dist`. O resultado fica em `dist/`. Para desenvolvimento, use `npm start`.
 
@@ -18,7 +18,9 @@ Enquanto você transmite, o app deixa de reproduzir o áudio de transmissões re
 
 O app já vem configurado para `wss://inexpetelas.squareweb.app`. Não é necessário configurar o servidor em cada PC. O código de acesso está embutido no cliente privado; quem receber o app também recebe acesso à sala. Não distribua publicamente.
 
-Na Square Cloud, mantenha a variável `ROOM_KEY` já configurada, o subdomínio `inexpetelas`, 512 MB e `node server.js` como inicialização. O arquivo `squarecloud.app` registra esses parâmetros. Só o servidor Node roda na Square; o instalador Windows roda no computador de cada amigo. Alterações no visual exigem distribuir o novo instalador, não apenas fazer deploy do servidor.
+Na Square Cloud, mantenha `ROOM_KEY`, o subdomínio `inexpetelas`, 512 MB e `node server.js` como inicialização. Configure também `GITHUB_TOKEN` como segredo com acesso de leitura somente ao conteúdo do repositório privado `kaitohmd/inexpetelas` (a API de Releases e os instaladores privados usam essa permissão). O arquivo `squarecloud.app` registra os parâmetros; substitua o texto de exemplo pelo token real no painel, sem gravá-lo no Git. A ponte `/updates/` autentica o app com `ROOM_KEY` e busca no GitHub a versão mais recente publicada. O app usa o instalador NSIS para atualizar dentro da própria instalação.
+
+Para publicar outra versão: aumente `version` no `package.json`, gere com `npm run dist`, crie uma Release no GitHub com a tag correspondente e anexe `INEXPETELAS-Setup-<versão>.exe`, o arquivo `.blockmap` e `latest.yml` produzidos em `dist/`. A Square procura automaticamente a Release mais recente; em novas versões do servidor, faça deploy na Square também. O token só deve existir nas variáveis de ambiente da Square e ter acesso de leitura.
 
 ## Telas e qualidade
 

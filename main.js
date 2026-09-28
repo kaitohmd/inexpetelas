@@ -1,6 +1,9 @@
 const { app, BrowserWindow, desktopCapturer, ipcMain, session } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 let selectedSource = null;
+const updateKey = '698df1b771e65277936172ef0e1738b001193440dba5e4c1';
+let updateState = { status: 'idle' };
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // A transmissão continua em tempo real mesmo quando o INEXPETELAS perde foco.
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -16,6 +19,36 @@ ipcMain.handle('window:focus-screen', (event, enabled) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   window?.setFullScreen(Boolean(enabled));
 });
+ipcMain.on('updates:install', () => {
+  if (updateState.status === 'downloaded') autoUpdater.quitAndInstall();
+});
+
+function publishUpdateState(state) {
+  updateState = state;
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.webContents.isLoading()) window.webContents.once('did-finish-load', () => window.webContents.send('updates:state', updateState));
+    else window.webContents.send('updates:state', updateState);
+  }
+}
+
+if (app.isPackaged) {
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.setFeedURL({
+    provider: 'generic',
+    url: 'https://inexpetelas.squareweb.app/updates/',
+    requestHeaders: { Authorization: `Bearer ${updateKey}` }
+  });
+  autoUpdater.on('checking-for-update', () => publishUpdateState({ status: 'checking' }));
+  autoUpdater.on('update-available', info => publishUpdateState({ status: 'downloading', version: info.version, percent: 0 }));
+  autoUpdater.on('download-progress', progress => publishUpdateState({ status: 'downloading', percent: Math.round(progress.percent) }));
+  autoUpdater.on('update-downloaded', info => publishUpdateState({ status: 'downloaded', version: info.version }));
+  autoUpdater.on('update-not-available', () => publishUpdateState({ status: 'idle' }));
+  autoUpdater.on('error', error => {
+    console.error('Atualização:', error.message);
+    publishUpdateState({ status: 'idle' });
+  });
+}
 
 function createWindow() {
   const window = new BrowserWindow({
@@ -55,6 +88,7 @@ app.whenReady().then(() => {
     callback(source ? { video: source, audio: 'loopback' } : null);
   });
   createWindow();
+  if (app.isPackaged) setTimeout(() => autoUpdater.checkForUpdates().catch(error => console.error('Verificação de atualização:', error.message)), 2500);
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

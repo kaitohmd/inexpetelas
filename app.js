@@ -73,7 +73,7 @@ function render() {
   // Reuse the actual video nodes so UI updates do not restart their decoder.
   const videos = new Map([...root.querySelectorAll('.share-video')].map(video => [video.dataset.owner, video]));
   layoutObserver.disconnect();
-  root.innerHTML = loading ? loadingMarkup() : connected ? callMarkup() : welcomeMarkup();
+  root.innerHTML = `${loading ? loadingMarkup() : connected ? callMarkup() : welcomeMarkup()}${updateMarkup()}`;
   document.body.classList.toggle('screen-focus-mode', Boolean(connected && focusedScreenId));
   root.querySelectorAll('.share-video').forEach(slot => {
     const existing = videos.get(slot.dataset.owner);
@@ -84,6 +84,14 @@ function render() {
   const grid = root.querySelector('.stage-grid');
   if (grid) { layoutObserver.observe(grid); layoutTiles(); }
   if (focusedScreenId) revealViewer();
+}
+let updateView = { status: 'idle' };
+function updateMarkup() {
+  if (updateView.status === 'idle') return '';
+  if (updateView.status === 'downloaded') return `<div class="update-overlay"><section class="update-card"><div class="update-mark">${icon('screen',32)}</div><strong>Atualização pronta</strong><button class="join-button" id="install-update">Reiniciar e atualizar</button></section></div>`;
+  const checking = updateView.status === 'checking';
+  const percent = Math.max(0, Math.min(100, updateView.percent || 0));
+  return `<div class="update-overlay"><section class="update-card"><div class="update-mark ${checking ? 'is-checking' : ''}">${icon('screen',32)}</div><strong>${checking ? 'Verificando atualizações' : 'Atualizando'}${checking ? '…' : ` · ${percent}%`}</strong>${checking ? '' : `<div class="update-progress"><span style="width:${percent}%"></span></div>`}</section></div>`;
 }
 function loadingMarkup() {
   return `<div class="loading-screen" role="status" aria-label="Carregando aplicativo"><div class="loading-mark">${icon('screen', 48)}</div><div class="loading-brand">INEXPETELAS</div><div class="loading-progress"><span></span></div></div>`;
@@ -139,6 +147,7 @@ function sourceMarkup() {
   return `<div class="modal-backdrop"><section class="modal source-modal" role="dialog" aria-modal="true" aria-label="Compartilhar tela"><div class="modal-head"><h2>Compartilhar tela</h2><button class="close-button" id="close-source" aria-label="Fechar">${icon('close', 20)}</button></div><div class="source-toolbar"><div class="source-tabs">${['screen','window'].map(type => `<button data-source-filter="${type}" aria-pressed="${sourceFilter === type}">${type === 'screen' ? 'Monitores' : 'Janelas'}</button>`).join('')}</div><select id="share-quality" aria-label="Qualidade da transmissão">${Object.entries(qualityPresets).map(([key,p]) => `<option value="${key}" ${quality === key ? 'selected' : ''}>${p.label}</option>`).join('')}</select></div><div class="source-grid">${sources.map((s, i) => s.id.startsWith(`${sourceFilter}:`) ? `<button class="source-choice" data-source="${i}"><img src="${s.thumbnail}" alt=""/><span>${safe(s.name)}</span></button>` : '').join('')}</div></section></div>`;
 }
 function bind() {
+  document.querySelector('#install-update')?.addEventListener('click', () => window.desktop?.installUpdate?.());
   document.querySelector('#join')?.addEventListener('click', join);
   document.querySelector('#name')?.addEventListener('input', event => { profile.name = event.target.value; localStorage.setItem('call-profile', JSON.stringify(profile)); });
   document.querySelector('#name')?.addEventListener('keydown', event => { if (event.key === 'Enter') join(); });
@@ -407,6 +416,7 @@ function leave(reason = '') {
 window.addEventListener('keydown', event => { if (event.key === 'Escape' && focusedScreenId) { event.preventDefault(); exitFocus(); } });
 window.addEventListener('beforeunload', () => { if (socket) socket.close(); });
 window.desktop?.onLeaveFullscreen?.(() => { if (focusedScreenId) { focusedScreenId = null; render(); } });
+window.desktop?.onUpdateState?.(state => { updateView = state; render(); });
 render();
 playSound('loading');
 setTimeout(() => { loading = false; render(); }, 5000);

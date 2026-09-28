@@ -3,5 +3,7 @@ contextBridge.exposeInMainWorld('desktop', {
   sources: () => ipcRenderer.invoke('screen:sources'),
   selectSource: id => ipcRenderer.invoke('screen:select', id),
   setFocusMode: enabled => ipcRenderer.invoke('window:focus-screen', enabled),
-  onLeaveFullscreen: callback => ipcRenderer.on('window:left-full-screen', () => callback())
+  onLeaveFullscreen: callback => ipcRenderer.on('window:left-full-screen', () => callback()),
+  onUpdateState: callback => ipcRenderer.on('updates:state', (_event, state) => callback(state)),
+  installUpdate: () => ipcRenderer.send('updates:install')
 });

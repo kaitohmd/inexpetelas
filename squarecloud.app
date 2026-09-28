@@ -5,3 +5,4 @@ VERSION=recommended
 START=node server.js
 SUBDOMAIN=inexpetelas
 AUTORESTART=true
+GITHUB_TOKEN=required-fine-grained-token
