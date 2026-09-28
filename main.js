@@ -4,7 +4,8 @@ const path = require('path');
 let selectedSource = null;
 let mainWindow = null;
 const updateKey = '698df1b771e65277936172ef0e1738b001193440dba5e4c1';
-let updateState = { status: 'idle' };
+// A versão instalada deve comunicar o estado assim que abrir, sem parecer travada.
+let updateState = { status: app.isPackaged ? 'checking' : 'idle' };
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // A transmissão continua em tempo real mesmo quando o INEXPETELAS perde foco.
 
@@ -13,6 +14,7 @@ ipcMain.handle('screen:sources', async () => {
   return sources.map(source => ({ id: source.id, name: source.name, thumbnail: source.thumbnail.toDataURL() }));
 });
 ipcMain.handle('screen:select', (_event, id) => { selectedSource = id; });
+ipcMain.handle('app:version', () => app.getVersion());
 ipcMain.handle('window:focus-screen', (event, enabled) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   window?.setFullScreen(Boolean(enabled));
@@ -75,6 +77,9 @@ function createWindow() {
 
   mainWindow = window;
   window.loadFile(path.join(__dirname, 'index.html'));
+  window.webContents.once('did-finish-load', () => {
+    window.webContents.send('updates:state', updateState);
+  });
   window.on('leave-full-screen', () => window.webContents.send('window:left-full-screen'));
   window.once('ready-to-show', () => window.show());
   window.maximize();
@@ -94,7 +99,7 @@ app.whenReady().then(() => {
     callback(source ? { video: source } : null);
   });
   createWindow();
-  if (app.isPackaged) setTimeout(() => autoUpdater.checkForUpdates().catch(error => console.error('Verificação de atualização:', error.message)), 2500);
+  if (app.isPackaged) autoUpdater.checkForUpdates().catch(error => console.error('Verificação de atualização:', error.message));
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

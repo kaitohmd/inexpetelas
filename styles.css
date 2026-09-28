@@ -15,6 +15,7 @@
 .call-header{justify-content:flex-start;padding:0 20px}
 .call-body .stage-grid{min-height:100%}
 .entry-card{padding:28px}
+.app-version{display:flex;justify-content:center;gap:6px;margin-top:14px;color:#77777f;font-size:11px;letter-spacing:.04em}.app-version span{color:#b0b0b8}
 .entry-card .profile-row{margin:4px 0 22px}
 
 /* Identidade INEXPETELAS: escuro, vermelho e direto ao ponto. */

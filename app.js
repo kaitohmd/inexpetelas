@@ -13,6 +13,7 @@ const icon = (name, size = 20) => `<svg width="${size}" height="${size}" viewBox
 const safe = value => String(value || '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const saved = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; } };
 let profile = saved('call-profile', { name: '', photo: '' });
+let appVersion = '';
 const bundledConfig = { version: 3, url: 'wss://inexpetelas.squareweb.app', key: '698df1b771e65277936172ef0e1738b001193440dba5e4c1' };
 let config = saved('call-config', bundledConfig);
 if (config.version !== bundledConfig.version) {
@@ -115,7 +116,7 @@ function loadingMarkup() {
 function welcomeMarkup() {
   return `<div class="welcome-shell">
     <header class="welcome-top"><div class="brand">${icon('screen', 22)} <span>INEXPETELAS</span></div></header>
-    <main class="welcome-main"><section class="entry-card"><div class="profile-row"><button class="photo-button" id="photo-button" title="Escolher foto">${avatar(profile)}<span class="photo-edit">${icon('pencil', 13)}</span></button><div class="name-wrap"><label for="name">Seu nome</label><input id="name" maxlength="24" placeholder="Como quer aparecer?" value="${safe(profile.name)}" autocomplete="off"/></div></div><input id="photo-file" type="file" accept="image/*" hidden/><button class="join-button" id="join" ${connecting ? 'disabled' : ''}>${connecting ? 'Entrando...' : 'Entrar'} ${icon('arrow', 17)}</button>${message ? `<div class="inline-message">${safe(message)}</div>` : ''}</section></main></div>`;
+    <main class="welcome-main"><section class="entry-card"><div class="profile-row"><button class="photo-button" id="photo-button" title="Escolher foto">${avatar(profile)}<span class="photo-edit">${icon('pencil', 13)}</span></button><div class="name-wrap"><label for="name">Seu nome</label><input id="name" maxlength="24" placeholder="Como quer aparecer?" value="${safe(profile.name)}" autocomplete="off"/></div></div><input id="photo-file" type="file" accept="image/*" hidden/><button class="join-button" id="join" ${connecting ? 'disabled' : ''}>${connecting ? 'Entrando...' : 'Entrar'} ${icon('arrow', 17)}</button><div class="app-version">INEXPETELAS <span>v${safe(appVersion || '…')}</span></div>${message ? `<div class="inline-message">${safe(message)}</div>` : ''}</section></main></div>`;
 }
 function participantTile(person, compact = false) {
   const name = `${safe(person.name)}${person.local ? ' <small>(você)</small>' : ''}`;
@@ -464,6 +465,7 @@ window.addEventListener('keydown', event => { if (event.key === 'Escape' && focu
 window.addEventListener('beforeunload', () => { if (socket) socket.close(); });
 window.desktop?.onLeaveFullscreen?.(() => { if (focusedScreenId) { focusedScreenId = null; render(); } });
 window.desktop?.onUpdateState?.(state => { updateView = state; render(); });
+window.desktop?.getVersion?.().then(version => { appVersion = version; if (!connected) render(); }).catch(() => {});
 render();
 playSound('loading');
 setTimeout(() => { loading = false; render(); }, 5000);

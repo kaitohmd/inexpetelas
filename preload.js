@@ -1,5 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('desktop', {
+  getVersion: () => ipcRenderer.invoke('app:version'),
   sources: () => ipcRenderer.invoke('screen:sources'),
   selectSource: id => ipcRenderer.invoke('screen:select', id),
   setSharing: active => ipcRenderer.send('screen:sharing', Boolean(active)),
