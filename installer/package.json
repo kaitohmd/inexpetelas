@@ -1,0 +1,26 @@
+{
+  "name": "inexpetelas-launcher",
+  "version": "1.0.0",
+  "productName": "INEXPETELAS",
+  "author": "Kaito",
+  "description": "Instalador e iniciador do INEXPETELAS",
+  "main": "main.js",
+  "build": {
+    "appId": "app.inexpetelas.launcher",
+    "productName": "INEXPETELAS",
+    "asar": true,
+    "electronVersion": "38.2.0",
+    "directories": {
+      "buildResources": "../assets"
+    },
+    "files": ["main.js", "preload.js", "renderer.js", "index.html", "styles.css", "thumb-up.svg", "app.ico", "package.json"],
+    "win": {
+      "icon": "../assets/app.ico",
+      "target": "portable",
+      "artifactName": "INEXPETELAS-${version}.${ext}"
+    },
+    "portable": {
+      "requestExecutionLevel": "user"
+    }
+  }
+}

@@ -3,7 +3,9 @@ const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = Number(process.env.PORT || process.argv[2] || 3000);
 const ROOM_KEY = process.env.ROOM_KEY || '';
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN && !/^(?:required-|placeholder)/i.test(process.env.GITHUB_TOKEN)
+  ? process.env.GITHUB_TOKEN
+  : '';
 const RELEASE_REPOSITORY = 'kaitohmd/inexpetelas';
 const members = new Map();
 const server = http.createServer((req, res) => {
@@ -24,7 +26,7 @@ const broadcast = (payload, except) => {
 };
 
 async function serveUpdate(req, res) {
-  if (!ROOM_KEY || !GITHUB_TOKEN || req.headers.authorization !== `Bearer ${ROOM_KEY}`) {
+  if (!ROOM_KEY || req.headers.authorization !== `Bearer ${ROOM_KEY}`) {
     res.writeHead(404).end();
     return;
   }
@@ -34,7 +36,8 @@ async function serveUpdate(req, res) {
     return;
   }
   try {
-    const headers = { authorization: `Bearer ${GITHUB_TOKEN}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'INEXPETELAS-updater' };
+    const headers = { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': 'INEXPETELAS-updater' };
+    if (GITHUB_TOKEN) headers.authorization = `Bearer ${GITHUB_TOKEN}`;
     const releaseResponse = await fetch(`https://api.github.com/repos/${RELEASE_REPOSITORY}/releases/latest`, { headers });
     if (!releaseResponse.ok) throw new Error(`GitHub release lookup failed (${releaseResponse.status})`);
     const release = await releaseResponse.json();
