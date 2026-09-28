@@ -22,6 +22,24 @@ let connecting = false, connected = false, choosingScreen = false;
 let message = '', peers = new Map();
 let focusedScreenId = null, pingTimer = null;
 let loading = true;
+let captureBusy = false, sourceFilter = 'screen', fitMode = 'contain';
+const qualityPresets = {
+  smooth: { label: '720p · 60 FPS', width: 1280, height: 720, fps: 60, bitrate: 5_000_000 },
+  sharp: { label: '1080p · 60 FPS', width: 1920, height: 1080, fps: 60, bitrate: 8_000_000 },
+  light: { label: '720p · 30 FPS', width: 1280, height: 720, fps: 30, bitrate: 3_000_000 }
+};
+let quality = saved('screen-quality', 'smooth');
+if (!qualityPresets[quality]) quality = 'smooth';
+const volumes = new Map();
+let viewerTimer;
+const layoutObserver = new ResizeObserver(() => layoutTiles());
+function layoutTiles() {
+  const grid = document.querySelector('.stage-grid');
+  if (!grid) return;
+  const box = screenLayout.fitTiles(grid.clientWidth, grid.clientHeight, grid.children.length);
+  grid.style.setProperty('--tile-width', `${Math.floor(box.width)}px`);
+  grid.style.setProperty('--tile-height', `${Math.floor(box.height)}px`);
+}
 const sounds = {
   loading: 'carregandoapp.ogg',
   join: 'entrounacall.ogg',
@@ -37,8 +55,10 @@ function playSound(name) {
   return audio;
 }
 const pcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
-const screenConstraints = { video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } }, audio: true };
-const screenEncoding = { maxBitrate: 5_000_000, maxFramerate: 60 };
+function captureConstraints() {
+  const preset = qualityPresets[quality];
+  return { width: { ideal: preset.width, max: preset.width }, height: { ideal: preset.height, max: preset.height }, frameRate: { ideal: preset.fps, max: preset.fps } };
+}
 
 function avatar(person, extra = '') {
   const photo = typeof person.photo === 'string' && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(person.photo) ? person.photo : '';
@@ -50,10 +70,20 @@ function notify(text) {
   setTimeout(() => el.remove(), 3200);
 }
 function render() {
-  document.body.classList.toggle('screen-focus-mode', Boolean(connected && focusedScreenId));
+  // Reuse the actual video nodes so UI updates do not restart their decoder.
+  const videos = new Map([...root.querySelectorAll('.share-video')].map(video => [video.dataset.owner, video]));
+  layoutObserver.disconnect();
   root.innerHTML = loading ? loadingMarkup() : connected ? callMarkup() : welcomeMarkup();
+  document.body.classList.toggle('screen-focus-mode', Boolean(connected && focusedScreenId));
+  root.querySelectorAll('.share-video').forEach(slot => {
+    const existing = videos.get(slot.dataset.owner);
+    if (existing) slot.replaceWith(existing);
+  });
   if (loading) return;
   bind(); attachMedia();
+  const grid = root.querySelector('.stage-grid');
+  if (grid) { layoutObserver.observe(grid); layoutTiles(); }
+  if (focusedScreenId) revealViewer();
 }
 function loadingMarkup() {
   return `<div class="loading-screen" role="status" aria-label="Carregando aplicativo"><div class="loading-mark">${icon('screen', 48)}</div><div class="loading-brand">INEXPETELAS</div><div class="loading-progress"><span></span></div></div>`;
@@ -86,12 +116,27 @@ function callMarkup() {
   }
   const gridClass = `stage-grid people-${Math.min(all.length, 8)}`;
   return `<div class="call-shell"><div class="call-main"><header class="call-header"><div class="brand">${icon('screen', 21)} <span>INEXPETELAS</span></div></header>
-    <main class="call-body ${focused ? 'is-focused' : ''}">${focused ? `<div class="focus-top"><button class="back-button" id="back-to-call">${icon('back', 18)} Voltar</button><span><strong>${safe(focused.name)}</strong></span></div><div class="focus-screen"><video class="share-video" data-owner="${safe(focused.id)}" autoplay playsinline muted></video><button class="focus-exit" id="exit-focus" title="Sair da tela cheia">${icon('back', 18)} Voltar</button></div><div class="focus-grid">${all.filter(person => person.id !== focused.id).map(person => participantTile(person, true)).join('')}</div>` : `<div class="${gridClass}">${all.map(person => participantTile(person)).join('')}</div>`}</main>
+    <main class="call-body ${focused ? 'is-focused' : ''}">${focused ? viewerMarkup(focused, sharing) : `<div class="${gridClass}">${all.map(person => participantTile(person)).join('')}</div>`}</main>
     <footer class="controls-bar"><div></div><div class="controls-center"><button class="control-btn ${screenStream ? 'active' : ''}" id="toggle-screen" title="${screenStream ? 'Parar compartilhamento' : 'Compartilhar tela'}">${icon('screen', 20)}<span>${screenStream ? 'Parar transmissão' : 'Compartilhar tela'}</span></button></div><button class="leave-btn" id="leave" title="Sair da sala">${icon('close', 19)}<span>Sair</span></button></footer>${choosingScreen ? sourceMarkup() : ''}</div></div>`;
 }
 let sources = [];
+function viewerMarkup(person, sharing) {
+  return `<section class="focus-screen" style="--video-fit:${fitMode}" aria-label="Tela de ${safe(person.name)}">
+    <video class="share-video" data-owner="${safe(person.id)}" autoplay playsinline muted></video>
+    <div class="viewer-top viewer-ui"><button class="back-button" id="exit-focus" title="Voltar à grade (Esc)">${icon('back')} Voltar</button><span>${safe(person.name)} <span class="tile-live">AO VIVO</span></span></div>
+    <div class="viewer-bottom viewer-ui"><div class="stream-switcher">${sharing.map(p => `<button data-focus-screen="${safe(p.id)}" class="stream-chip ${p.id === person.id ? 'selected' : ''}" aria-pressed="${p.id === person.id}">${avatar(p)}<span>${safe(p.name)}</span></button>`).join('')}</div>
+    <div class="viewer-actions">${person.local ? '' : `<label class="stream-volume">Volume <input id="stream-volume" type="range" min="0" max="100" value="${volumes.get(person.id) ?? 100}" aria-label="Volume da transmissão"/></label>`}<button class="back-button" id="toggle-fit" title="Ajustar mantém toda a imagem; preencher pode cortar as bordas">${icon('expand', 16)} ${fitMode === 'contain' ? 'Preencher' : 'Ajustar'}</button></div></div>
+  </section>`;
+}
+function revealViewer() {
+  const viewer = document.querySelector('.focus-screen');
+  if (!viewer) return;
+  viewer.classList.add('controls-visible');
+  clearTimeout(viewerTimer);
+  viewerTimer = setTimeout(() => viewer.classList.remove('controls-visible'), 2500);
+}
 function sourceMarkup() {
-  return `<div class="modal-backdrop"><section class="modal source-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><h2>Escolha uma tela ou janela</h2></div><button class="close-button" id="close-source">${icon('close', 20)}</button></div><div class="source-grid">${sources.map((s, i) => `<button class="source-choice" data-source="${i}"><img src="${s.thumbnail}" alt=""/><span>${safe(s.name)}</span></button>`).join('')}</div></section></div>`;
+  return `<div class="modal-backdrop"><section class="modal source-modal" role="dialog" aria-modal="true" aria-label="Compartilhar tela"><div class="modal-head"><h2>Compartilhar tela</h2><button class="close-button" id="close-source" aria-label="Fechar">${icon('close', 20)}</button></div><div class="source-toolbar"><div class="source-tabs">${['screen','window'].map(type => `<button data-source-filter="${type}" aria-pressed="${sourceFilter === type}">${type === 'screen' ? 'Monitores' : 'Janelas'}</button>`).join('')}</div><select id="share-quality" aria-label="Qualidade da transmissão">${Object.entries(qualityPresets).map(([key,p]) => `<option value="${key}" ${quality === key ? 'selected' : ''}>${p.label}</option>`).join('')}</select></div><div class="source-grid">${sources.map((s, i) => s.id.startsWith(`${sourceFilter}:`) ? `<button class="source-choice" data-source="${i}"><img src="${s.thumbnail}" alt=""/><span>${safe(s.name)}</span></button>` : '').join('')}</div></section></div>`;
 }
 function bind() {
   document.querySelector('#join')?.addEventListener('click', join);
@@ -103,6 +148,17 @@ function bind() {
   document.querySelector('#leave')?.addEventListener('click', () => leave());
   document.querySelector('#back-to-call')?.addEventListener('click', exitFocus);
   document.querySelector('#exit-focus')?.addEventListener('click', exitFocus);
+  document.querySelector('.focus-screen')?.addEventListener('pointermove', revealViewer);
+  document.querySelector('#toggle-fit')?.addEventListener('click', () => {
+    fitMode = fitMode === 'contain' ? 'cover' : 'contain'; render();
+  });
+  document.querySelector('#stream-volume')?.addEventListener('input', event => {
+    volumes.set(focusedScreenId, Number(event.target.value)); attachMedia();
+  });
+  document.querySelector('#share-quality')?.addEventListener('change', event => {
+    quality = event.target.value; localStorage.setItem('screen-quality', JSON.stringify(quality));
+  });
+  document.querySelectorAll('[data-source-filter]').forEach(button => button.addEventListener('click', () => { sourceFilter = button.dataset.sourceFilter; render(); }));
   document.querySelectorAll('[data-focus-screen]').forEach(button => button.addEventListener('click', () => {
     focusedScreenId = button.dataset.focusScreen;
     render();
@@ -169,7 +225,10 @@ function handleMessage(data) {
     const peer = peers.get(data.id); peer?.pc?.close(); peers.delete(data.id); if (focusedScreenId === data.id) exitFocus(); else render(); playSound('leave');
   } else if (data.type === 'state') {
     const peer = peers.get(data.id); if (peer) { const screenChanged = peer.profile.screen !== data.screen; peer.profile.screen = !!data.screen; if (!data.screen && focusedScreenId === data.id) exitFocus(); else render(); if (screenChanged) playSound('screen'); }
-  } else if (data.type === 'signal') receiveSignal(data.from, data.signal);
+  } else if (data.type === 'signal') {
+    const peer = peers.get(data.from);
+    if (peer) peer.signalQueue = (peer.signalQueue || Promise.resolve()).then(() => receiveSignal(data.from, data.signal)).catch(console.error);
+  }
 }
 function send(data) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data)); }
 function stateUpdate() { send({ type: 'state', screen: !!screenStream }); render(); }
@@ -191,7 +250,13 @@ function peerConnection(id, answering = false) {
     event.track.onended = () => { peer.streams[kind].removeTrack(event.track); render(); };
     attachMedia();
   };
-  pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') notify(`Falha na conexão com ${peer.profile.name}. Essa rede pode precisar de TURN.`); };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'connected') { peer.restarts = 0; tuneAllSenders(); }
+    if (pc.connectionState === 'failed') {
+      if ((peer.restarts || 0) < 2) { peer.restarts = (peer.restarts || 0) + 1; pc.restartIce(); makeOffer(id); }
+      else notify(`Não foi possível conectar à tela de ${peer.profile.name}.`);
+    }
+  };
   return pc;
 }
 async function makeOffer(id) {
@@ -206,12 +271,16 @@ async function receiveSignal(id, signal) {
   const peer = peers.get(id); if (!peer) return;
   try {
     if (signal.type === 'candidate') {
+      if (peer.ignoreOffer) return;
       if (peer.pc?.remoteDescription) await peer.pc.addIceCandidate(signal.candidate);
       else peer.candidates.push(signal.candidate);
       return;
     }
     const pc = peerConnection(id, signal.type === 'offer'); if (!pc) return;
     if (signal.type === 'offer') {
+      const collision = peer.offering || pc.signalingState !== 'stable';
+      peer.ignoreOffer = collision && String(myId) < String(id);
+      if (peer.ignoreOffer) return;
       if (pc.signalingState !== 'stable') await pc.setLocalDescription({ type: 'rollback' });
       await pc.setRemoteDescription(signal.sdp);
       if (!peer.senders) {
@@ -229,10 +298,14 @@ async function receiveSignal(id, signal) {
       }
       await pc.setLocalDescription(await pc.createAnswer());
       send({ type: 'signal', to: id, signal: { type: 'answer', sdp: pc.localDescription } });
-    } else if (signal.type === 'answer') await pc.setRemoteDescription(signal.sdp);
+    } else if (signal.type === 'answer') {
+      if (pc.signalingState !== 'have-local-offer') return;
+      await pc.setRemoteDescription(signal.sdp);
+      peer.ignoreOffer = false;
+    }
     for (const candidate of peer.candidates.splice(0)) await pc.addIceCandidate(candidate);
     if (peer.needsOffer && pc.signalingState === 'stable') makeOffer(id);
-  } catch (error) { console.error('Sinalização WebRTC:', error); }
+  } catch (error) { console.error('Sinalização WebRTC:', error.name, error.message); }
 }
 async function replace(kind, track) {
   await Promise.all([...peers.values()].map(async peer => {
@@ -245,26 +318,37 @@ async function replace(kind, track) {
   }).map(promise => promise.catch(console.error)));
 }
 async function tuneScreenSender(sender) {
+  if (!sender.track) return;
+  const preset = qualityPresets[quality];
   const parameters = sender.getParameters();
   if (!parameters.encodings?.length) parameters.encodings = [{}];
-  parameters.encodings[0] = { ...parameters.encodings[0], ...screenEncoding };
+  // Bound total outgoing video to 16 Mbps instead of multiplying 8 Mbps by seven peers.
+  const budget = Math.min(preset.bitrate, Math.floor(16_000_000 / Math.max(1, peers.size)));
+  parameters.encodings[0] = { ...parameters.encodings[0], maxBitrate: budget, maxFramerate: preset.fps };
   parameters.degradationPreference = 'maintain-framerate';
   await sender.setParameters(parameters).catch(error => console.warn('Ajuste de qualidade:', error));
 }
+function tuneAllSenders() {
+  return Promise.all([...peers.values()].map(peer => peer.senders?.screen ? tuneScreenSender(peer.senders.screen) : null));
+}
 async function chooseScreen() {
+  if (captureBusy) return;
   if (screenStream) return stopScreen();
   try { sources = await window.desktop.sources(); choosingScreen = true; render(); }
   catch { notify('Não foi possível listar as telas.'); }
 }
 async function startScreen(source) {
+  if (captureBusy || !source) return;
+  captureBusy = true;
   choosingScreen = false; render();
   try {
     await window.desktop.selectSource(source.id);
-    screenStream = await navigator.mediaDevices.getDisplayMedia(screenConstraints);
+    const preset = qualityPresets[quality];
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { width: { ideal: preset.width }, height: { ideal: preset.height }, frameRate: { ideal: preset.fps } }, audio: true });
     const videoTrack = screenStream.getVideoTracks()[0];
     // Para navegação, jogos e Alt+Tab, fluidez importa mais que preservar texto estático.
     videoTrack.contentHint = 'motion';
-    await videoTrack.applyConstraints(screenConstraints.video).catch(() => {});
+    await videoTrack.applyConstraints(captureConstraints()).catch(error => console.warn('Limite de captura:', error));
     videoTrack.onended = stopScreen;
     await replace('screen', videoTrack);
     await replace('audio', screenStream.getAudioTracks()[0] || null);
@@ -279,7 +363,7 @@ async function startScreen(source) {
       await Promise.all([replace('screen', null), replace('audio', null)]);
     }
     notify(`Não foi possível compartilhar: ${error.message || error.name || 'erro desconhecido'}`);
-  }
+  } finally { captureBusy = false; }
 }
 async function stopScreen() {
   if (!screenStream) return;
@@ -295,7 +379,8 @@ function attachMedia() {
     if (!audio) { audio = document.createElement('audio'); audio.dataset.audio = id; audio.autoplay = true; document.body.append(audio); }
     if (audio.srcObject !== peer.streams.audio) audio.srcObject = peer.streams.audio;
     // O loopback captura o áudio do sistema; não tocar streams remotos durante a própria transmissão evita realimentação.
-    audio.muted = !!screenStream;
+    audio.muted = !!screenStream || Boolean(focusedScreenId && focusedScreenId !== id);
+    audio.volume = (volumes.get(id) ?? 100) / 100;
   }
   document.querySelectorAll('.share-video').forEach(share => { if (share.dataset.owner === myId) attachVideo(share, screenStream); });
 }
@@ -303,7 +388,7 @@ function attachVideo(video, stream) {
   if (video.srcObject !== stream) video.srcObject = stream;
   const play = () => video.play().catch(() => {});
   if (video.readyState >= HTMLMediaElement.HAVE_METADATA) play();
-  else video.addEventListener('loadedmetadata', play, { once: true });
+  else video.onloadedmetadata = play;
 }
 function leave(reason = '') {
   if (connected && !reason) playSound('leave');
@@ -321,6 +406,7 @@ function leave(reason = '') {
 }
 window.addEventListener('keydown', event => { if (event.key === 'Escape' && focusedScreenId) { event.preventDefault(); exitFocus(); } });
 window.addEventListener('beforeunload', () => { if (socket) socket.close(); });
+window.desktop?.onLeaveFullscreen?.(() => { if (focusedScreenId) { focusedScreenId = null; render(); } });
 render();
 playSound('loading');
 setTimeout(() => { loading = false; render(); }, 5000);

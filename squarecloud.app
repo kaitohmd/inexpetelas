@@ -1,0 +1,7 @@
+DISPLAY_NAME=INEXPETELAS
+MAIN=server.js
+MEMORY=512
+VERSION=recommended
+START=node server.js
+SUBDOMAIN=inexpetelas
+AUTORESTART=true

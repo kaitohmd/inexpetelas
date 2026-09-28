@@ -21,10 +21,11 @@ function createWindow() {
   const window = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 980,
-    minHeight: 640,
-    backgroundColor: '#111214',
+    minWidth: 640,
+    minHeight: 420,
+    backgroundColor: '#070708',
     title: 'INEXPETELAS',
+    icon: path.join(__dirname, 'assets', 'app.ico'),
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -37,6 +38,7 @@ function createWindow() {
   });
 
   window.loadFile(path.join(__dirname, 'index.html'));
+  window.on('leave-full-screen', () => window.webContents.send('window:left-full-screen'));
   window.once('ready-to-show', () => window.show());
   window.maximize();
 }

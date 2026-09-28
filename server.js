@@ -59,5 +59,5 @@ wss.on('connection', socket => {
   });
 });
 
-const HOST = '0.0.0.0';
+const HOST = ROOM_KEY ? '0.0.0.0' : '127.0.0.1';
 server.listen(PORT, HOST, () => console.log(`Servidor de telas em ${HOST}:${PORT}${ROOM_KEY ? ' (com código)' : ' (somente local)'}`));

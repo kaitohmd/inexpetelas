@@ -1,17 +1,51 @@
 {
   "name": "inexpetelas",
-  "version": "0.3.0",
+  "version": "0.4.0",
+  "productName": "INEXPETELAS",
+  "author": "Kaito",
   "description": "Compartilhamento de tela privado para amigos",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "server": "node server.js"
+    "server": "node server.js",
+    "dist": "electron-builder --win nsis --x64",
+    "test": "node --test tests/*.test.cjs"
   },
   "dependencies": {
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "electron": "^38.2.0"
+    "electron": "^38.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "app.inexpetelas.desktop",
+    "productName": "INEXPETELAS",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "app.js",
+      "index.html",
+      "styles.css",
+      "screen-layout.js",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "assets/app.ico",
+      "target": "nsis",
+      "signExecutable": false,
+      "artifactName": "INEXPETELAS-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "INEXPETELAS"
+    }
   }
 }
