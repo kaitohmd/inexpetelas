@@ -11,7 +11,7 @@ const icon = (name, size = 20) => `<svg width="${size}" height="${size}" viewBox
 const safe = value => String(value || '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const saved = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; } };
 let profile = saved('call-profile', { name: '', photo: '' });
-const bundledConfig = { version: 2, url: 'ws://localhost:3000', key: '' };
+const bundledConfig = { version: 3, url: 'wss://inexpetelas.squareweb.app', key: '698df1b771e65277936172ef0e1738b001193440dba5e4c1' };
 let config = saved('call-config', bundledConfig);
 if (config.version !== bundledConfig.version) {
   config = bundledConfig;
