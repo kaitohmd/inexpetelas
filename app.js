@@ -1,6 +1,8 @@
 const root = document.querySelector('#app');
 const icons = {
   screen: '<rect x="2" y="3" width="20" height="15" rx="2"/><path d="M8 22h8m-4-4v4m0-15v7m-3-3 3 3 3-3"/>',
+  volume: '<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7m3-10a9 9 0 0 1 0 13"/>',
+  muted: '<path d="M11 5 6 9H3v6h3l5 4z"/><path d="m16 9 5 6m0-6-5 6"/>',
   close: '<path d="M18 6 6 18M6 6l12 12"/>',
   pencil: '<path d="m16 4 4 4M3 21l4.5-1 12-12a2.8 2.8 0 0 0-4-4l-12 12z"/>',
   arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
@@ -17,20 +19,19 @@ if (config.version !== bundledConfig.version) {
   config = bundledConfig;
   localStorage.setItem('call-config', JSON.stringify(config));
 }
-let socket, myId, screenStream;
+let socket, myId, screenStream, publisherPc, receiverPc, receiverQueue = Promise.resolve();
+const sfuMidOwners = new Map();
 let connecting = false, connected = false, choosingScreen = false;
 let message = '', peers = new Map();
 let focusedScreenId = null, pingTimer = null;
 let loading = true;
 let captureBusy = false, sourceFilter = 'screen', fitMode = 'contain';
-const qualityPresets = {
-  smooth: { label: '720p · 60 FPS', width: 1280, height: 720, fps: 60, bitrate: 5_000_000 },
-  sharp: { label: '1080p · 60 FPS', width: 1920, height: 1080, fps: 60, bitrate: 8_000_000 },
-  light: { label: '720p · 30 FPS', width: 1280, height: 720, fps: 30, bitrate: 3_000_000 }
-};
+let cpuLimited = false, cpuPressureSamples = 0, healthySamples = 0, statsTimer = null, statsBusy = false;
+const qualityPresets = screenQuality.presets;
 let quality = saved('screen-quality', 'smooth');
 if (!qualityPresets[quality]) quality = 'smooth';
 const volumes = new Map();
+const mutedScreens = new Set();
 let viewerTimer;
 const layoutObserver = new ResizeObserver(() => layoutTiles());
 function layoutTiles() {
@@ -54,10 +55,25 @@ function playSound(name) {
   audio.play().catch(() => {});
   return audio;
 }
-const pcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
-function captureConstraints() {
-  const preset = qualityPresets[quality];
-  return { width: { ideal: preset.width, max: preset.width }, height: { ideal: preset.height, max: preset.height }, frameRate: { ideal: preset.fps, max: preset.fps } };
+const pcConfig = { iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] };
+function sfuBase() { return config.url.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/$/, ''); }
+async function sfuRequest(path, method = 'POST', payload = {}) {
+  const response = await fetch(`${sfuBase()}${path}`, {
+    method,
+    headers: { authorization: `Bearer ${config.key}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ ...payload, memberId: myId })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Não foi possível conectar ao servidor de mídia.');
+  return data;
+}
+function waitIceGathering(pc) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => { if (pc.iceGatheringState === 'complete') { pc.removeEventListener('icegatheringstatechange', done); resolve(); } };
+    pc.addEventListener('icegatheringstatechange', done);
+    setTimeout(resolve, 8000);
+  });
 }
 
 function avatar(person, extra = '') {
@@ -133,7 +149,7 @@ function viewerMarkup(person, sharing) {
     <video class="share-video" data-owner="${safe(person.id)}" autoplay playsinline muted></video>
     <div class="viewer-top viewer-ui"><button class="back-button" id="exit-focus" title="Voltar à grade (Esc)">${icon('back')} Voltar</button><span>${safe(person.name)} <span class="tile-live">AO VIVO</span></span></div>
     <div class="viewer-bottom viewer-ui"><div class="stream-switcher">${sharing.map(p => `<button data-focus-screen="${safe(p.id)}" class="stream-chip ${p.id === person.id ? 'selected' : ''}" aria-pressed="${p.id === person.id}">${avatar(p)}<span>${safe(p.name)}</span></button>`).join('')}</div>
-    <div class="viewer-actions">${person.local ? '' : `<label class="stream-volume">Volume <input id="stream-volume" type="range" min="0" max="100" value="${volumes.get(person.id) ?? 100}" aria-label="Volume da transmissão"/></label>`}<button class="back-button" id="toggle-fit" title="Ajustar mantém toda a imagem; preencher pode cortar as bordas">${icon('expand', 16)} ${fitMode === 'contain' ? 'Preencher' : 'Ajustar'}</button></div></div>
+    <div class="viewer-actions">${person.local ? '' : `<label class="stream-volume">Volume <input id="stream-volume" type="range" min="0" max="100" value="${volumes.get(person.id) ?? 100}" aria-label="Volume da transmissão"/></label><button class="back-button" id="toggle-screen-audio" aria-pressed="${mutedScreens.has(person.id)}" title="${mutedScreens.has(person.id) ? 'Ativar áudio desta tela' : 'Silenciar áudio desta tela'}">${icon(mutedScreens.has(person.id) ? 'muted' : 'volume', 16)}</button>`}<button class="back-button" id="toggle-fit" title="Ajustar mantém toda a imagem; preencher pode cortar as bordas">${icon('expand', 16)} ${fitMode === 'contain' ? 'Preencher' : 'Ajustar'}</button></div></div>
   </section>`;
 }
 function revealViewer() {
@@ -164,12 +180,23 @@ function bind() {
   document.querySelector('#stream-volume')?.addEventListener('input', event => {
     volumes.set(focusedScreenId, Number(event.target.value)); attachMedia();
   });
+  document.querySelector('#toggle-screen-audio')?.addEventListener('click', () => {
+    if (!focusedScreenId || focusedScreenId === myId) return;
+    if (mutedScreens.has(focusedScreenId)) mutedScreens.delete(focusedScreenId);
+    else mutedScreens.add(focusedScreenId);
+    render();
+  });
   document.querySelector('#share-quality')?.addEventListener('change', event => {
     quality = event.target.value; localStorage.setItem('screen-quality', JSON.stringify(quality));
+    cpuLimited = false; cpuPressureSamples = 0; healthySamples = 0;
+    tuneCaptureProfile();
   });
   document.querySelectorAll('[data-source-filter]').forEach(button => button.addEventListener('click', () => { sourceFilter = button.dataset.sourceFilter; render(); }));
   document.querySelectorAll('[data-focus-screen]').forEach(button => button.addEventListener('click', () => {
     focusedScreenId = button.dataset.focusScreen;
+    send({ type: 'view', screenId: focusedScreenId === myId ? null : focusedScreenId });
+    tuneAllSenders();
+    tuneCaptureProfile();
     render();
     window.desktop?.setFocusMode?.(true).catch(console.error);
   }));
@@ -178,6 +205,9 @@ function bind() {
 }
 function exitFocus() {
   focusedScreenId = null;
+  send({ type: 'view', screenId: null });
+  tuneAllSenders();
+  tuneCaptureProfile();
   window.desktop?.setFocusMode?.(false).catch(console.error);
   render();
 }
@@ -221,124 +251,122 @@ async function join() {
 function handleMessage(data) {
   if (data.type === 'welcome') {
     myId = data.id; connecting = false; connected = true;
-    for (const person of data.peers) peers.set(person.id, { profile: person, pc: null, streams: { audio: new MediaStream(), screen: new MediaStream() }, candidates: [] });
+    for (const person of data.peers) peers.set(person.id, { profile: person, streams: { audio: new MediaStream(), screen: new MediaStream() } });
     render();
     playSound('join');
     requestPing(); pingTimer = setInterval(requestPing, 5000);
-    for (const person of data.peers) makeOffer(person.id);
+    refreshSubscriptions();
   } else if (data.type === 'pong') {
     // O ping continua sendo usado só para manter a conexão ativa; não precisa aparecer na interface.
   } else if (data.type === 'joined') {
-    peers.set(data.peer.id, { profile: data.peer, pc: null, streams: { audio: new MediaStream(), screen: new MediaStream() }, candidates: [] }); render(); playSound('join'); notify(`${data.peer.name} entrou na sala`);
+    peers.set(data.peer.id, { profile: data.peer, streams: { audio: new MediaStream(), screen: new MediaStream() } }); render(); tuneCaptureProfile(); playSound('join'); notify(`${data.peer.name} entrou na sala`);
   } else if (data.type === 'left') {
-    const peer = peers.get(data.id); peer?.pc?.close(); peers.delete(data.id); if (focusedScreenId === data.id) exitFocus(); else render(); playSound('leave');
+    peers.delete(data.id); if (focusedScreenId === data.id) exitFocus(); else { render(); tuneCaptureProfile(); } refreshSubscriptions(); playSound('leave');
   } else if (data.type === 'state') {
-    const peer = peers.get(data.id); if (peer) { const screenChanged = peer.profile.screen !== data.screen; peer.profile.screen = !!data.screen; if (!data.screen && focusedScreenId === data.id) exitFocus(); else render(); if (screenChanged) playSound('screen'); }
-  } else if (data.type === 'signal') {
-    const peer = peers.get(data.from);
-    if (peer) peer.signalQueue = (peer.signalQueue || Promise.resolve()).then(() => receiveSignal(data.from, data.signal)).catch(console.error);
+    const peer = peers.get(data.id); if (peer) { const screenChanged = peer.profile.screen !== data.screen; peer.profile.screen = !!data.screen; if (!data.screen && focusedScreenId === data.id) exitFocus(); else { render(); tuneCaptureProfile(); } if (screenChanged) { refreshSubscriptions(); playSound('screen'); } }
+  } else if (data.type === 'view') {
+    const peer = peers.get(data.id);
+    if (peer) {
+      peer.profile.watching = data.screenId;
+      tuneCaptureProfile();
+    }
   }
 }
 function send(data) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data)); }
-function stateUpdate() { send({ type: 'state', screen: !!screenStream }); render(); }
-function peerConnection(id, answering = false) {
-  const peer = peers.get(id); if (!peer) return null;
-  if (peer.pc) return peer.pc;
-  const pc = new RTCPeerConnection(pcConfig); peer.pc = pc;
-  if (!answering) {
-    peer.senders = {
-      screen: pc.addTransceiver(screenStream?.getVideoTracks()[0] || 'video', { direction: 'sendrecv', streams: screenStream ? [screenStream] : [] }).sender,
-      audio: pc.addTransceiver(screenStream?.getAudioTracks()[0] || 'audio', { direction: 'sendrecv', streams: screenStream?.getAudioTracks().length ? [screenStream] : [] }).sender
+function stateUpdate() { window.desktop?.setSharing?.(!!screenStream); send({ type: 'state', screen: !!screenStream }); render(); }
+async function refreshSubscriptions() {
+  if (!connected || !myId) return;
+  receiverQueue = receiverQueue.then(async () => {
+    const publications = [...peers.entries()].filter(([, peer]) => peer.profile.screen).map(([memberId]) => ({ memberId }));
+    receiverPc?.close(); receiverPc = null; sfuMidOwners.clear();
+    for (const peer of peers.values()) peer.streams.screen = new MediaStream();
+    if (!publications.length) { attachMedia(); render(); return; }
+    const session = await sfuRequest('/sfu/session', 'POST', { role: 'subscriber' });
+    const pc = new RTCPeerConnection(pcConfig); receiverPc = pc;
+    pc.ontrack = event => {
+      const ownerId = sfuMidOwners.get(event.transceiver.mid);
+      const peer = peers.get(ownerId);
+      if (!peer) return;
+      if (!peer.streams.screen.getTracks().some(track => track.id === event.track.id)) peer.streams.screen.addTrack(event.track);
+      event.track.onunmute = attachMedia;
+      event.track.onended = () => { peer.streams.screen.removeTrack(event.track); render(); };
+      attachMedia();
     };
-  }
-  pc.onicecandidate = event => { if (event.candidate) send({ type: 'signal', to: id, signal: { type: 'candidate', candidate: event.candidate } }); };
-  pc.ontrack = event => {
-    const kind = event.track.kind === 'audio' ? 'audio' : 'screen';
-    if (!peer.streams[kind].getTracks().some(track => track.id === event.track.id)) peer.streams[kind].addTrack(event.track);
-    event.track.onunmute = () => attachMedia();
-    event.track.onended = () => { peer.streams[kind].removeTrack(event.track); render(); };
-    attachMedia();
-  };
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'connected') { peer.restarts = 0; tuneAllSenders(); }
-    if (pc.connectionState === 'failed') {
-      if ((peer.restarts || 0) < 2) { peer.restarts = (peer.restarts || 0) + 1; pc.restartIce(); makeOffer(id); }
-      else notify(`Não foi possível conectar à tela de ${peer.profile.name}.`);
-    }
-  };
-  return pc;
-}
-async function makeOffer(id) {
-  const peer = peers.get(id), pc = peerConnection(id); if (!pc || !peer) return;
-  if (peer.offering || pc.signalingState !== 'stable') { peer.needsOffer = true; return; }
-  peer.offering = true; peer.needsOffer = false;
-  try { await pc.setLocalDescription(await pc.createOffer()); send({ type: 'signal', to: id, signal: { type: 'offer', sdp: pc.localDescription } }); }
-  catch (error) { console.error('Oferta WebRTC:', error); }
-  finally { peer.offering = false; }
-}
-async function receiveSignal(id, signal) {
-  const peer = peers.get(id); if (!peer) return;
-  try {
-    if (signal.type === 'candidate') {
-      if (peer.ignoreOffer) return;
-      if (peer.pc?.remoteDescription) await peer.pc.addIceCandidate(signal.candidate);
-      else peer.candidates.push(signal.candidate);
-      return;
-    }
-    const pc = peerConnection(id, signal.type === 'offer'); if (!pc) return;
-    if (signal.type === 'offer') {
-      const collision = peer.offering || pc.signalingState !== 'stable';
-      peer.ignoreOffer = collision && String(myId) < String(id);
-      if (peer.ignoreOffer) return;
-      if (pc.signalingState !== 'stable') await pc.setLocalDescription({ type: 'rollback' });
-      await pc.setRemoteDescription(signal.sdp);
-      if (!peer.senders) {
-        const transceivers = pc.getTransceivers();
-        peer.senders = { screen: transceivers[0].sender, audio: transceivers[1].sender };
-        // Quem responde à primeira oferta também precisa poder mandar uma tela
-        // depois. Sem isto, a chamada fica funcionando em apenas uma direção.
-        for (const transceiver of transceivers.slice(0, 2)) transceiver.direction = 'sendrecv';
-        for (const [kind, track] of [['screen', screenStream?.getVideoTracks()[0]], ['audio', screenStream?.getAudioTracks()[0]]]) {
-          if (!track) continue;
-          peer.senders[kind].setStreams(screenStream);
-          await peer.senders[kind].replaceTrack(track);
-          if (kind === 'screen') await tuneScreenSender(peer.senders[kind]);
-        }
-      }
-      await pc.setLocalDescription(await pc.createAnswer());
-      send({ type: 'signal', to: id, signal: { type: 'answer', sdp: pc.localDescription } });
-    } else if (signal.type === 'answer') {
-      if (pc.signalingState !== 'have-local-offer') return;
-      await pc.setRemoteDescription(signal.sdp);
-      peer.ignoreOffer = false;
-    }
-    for (const candidate of peer.candidates.splice(0)) await pc.addIceCandidate(candidate);
-    if (peer.needsOffer && pc.signalingState === 'stable') makeOffer(id);
-  } catch (error) { console.error('Sinalização WebRTC:', error.name, error.message); }
+    const response = await sfuRequest('/sfu/subscribe', 'POST', { publications });
+    for (const track of response.tracks || []) if (track.mid && track.ownerId) sfuMidOwners.set(String(track.mid), track.ownerId);
+    if (!response.sessionDescription) { pc.close(); receiverPc = null; return; }
+    await pc.setRemoteDescription(response.sessionDescription);
+    await pc.setLocalDescription(await pc.createAnswer());
+    await waitIceGathering(pc);
+    await sfuRequest('/sfu/renegotiate', 'PUT', { sessionDescription: pc.localDescription });
+    attachMedia(); render();
+  }).catch(error => { console.error('Assinatura SFU:', error); notify('Não foi possível abrir a transmissão.'); });
+  return receiverQueue;
 }
 async function replace(kind, track) {
-  await Promise.all([...peers.values()].map(async peer => {
-    const sender = peer.senders?.[kind]; if (!sender) return;
-    const transceiver = peer.pc?.getTransceivers().find(item => item.sender === sender);
-    if (transceiver && transceiver.direction !== 'sendrecv') transceiver.direction = 'sendrecv';
-    sender.setStreams(...(track && screenStream ? [screenStream] : []));
-    await sender.replaceTrack(track || null);
-    if (kind === 'screen' && track) await tuneScreenSender(sender);
-  }).map(promise => promise.catch(console.error)));
+  if (kind === 'screen' && publisherPc) {
+    const sender = publisherPc.getSenders().find(item => item.track?.kind === 'video');
+    if (sender) await sender.replaceTrack(track || null).catch(console.error);
+  }
 }
-async function tuneScreenSender(sender) {
+async function tuneScreenSender(sender, focused) {
   if (!sender.track) return;
-  const preset = qualityPresets[quality];
+  const profile = screenQuality.outgoingProfile(focused, quality, peers.size, cpuLimited);
   const parameters = sender.getParameters();
   if (!parameters.encodings?.length) parameters.encodings = [{}];
-  // Bound total outgoing video to 16 Mbps instead of multiplying 8 Mbps by seven peers.
-  const budget = Math.min(preset.bitrate, Math.floor(16_000_000 / Math.max(1, peers.size)));
-  parameters.encodings[0] = { ...parameters.encodings[0], maxBitrate: budget, maxFramerate: preset.fps };
-  parameters.degradationPreference = 'maintain-framerate';
+  parameters.encodings[0] = { ...parameters.encodings[0], maxBitrate: profile.maxBitrate, maxFramerate: profile.maxFramerate, scaleResolutionDownBy: profile.scaleResolutionDownBy, priority: profile.priority };
+  // Balanced adaptation lets Chromium trade resolution/FPS if the game and encoder compete.
+  parameters.degradationPreference = 'balanced';
   await sender.setParameters(parameters).catch(error => console.warn('Ajuste de qualidade:', error));
 }
 function tuneAllSenders() {
-  return Promise.all([...peers.values()].map(peer => peer.senders?.screen ? tuneScreenSender(peer.senders.screen) : null));
+  if (!publisherPc) return Promise.resolve();
+  const sender = publisherPc.getSenders().find(item => item.track?.kind === 'video');
+  const hasFocusedViewer = focusedScreenId === myId || [...peers.values()].some(peer => peer.profile.watching === myId);
+  return sender ? tuneScreenSender(sender, hasFocusedViewer) : Promise.resolve();
+}
+function tuneCaptureProfile() {
+  const track = screenStream?.getVideoTracks()[0];
+  if (!track) return;
+  const hasFocusedViewer = focusedScreenId === myId || [...peers.values()].some(peer => peer.profile.watching === myId);
+  const preset = screenQuality.captureProfile(hasFocusedViewer, quality, cpuLimited);
+  track.applyConstraints({ width: { ideal: preset.width, max: preset.width }, height: { ideal: preset.height, max: preset.height }, frameRate: { ideal: preset.frameRate, max: preset.frameRate } })
+    .catch(error => console.warn('Ajuste adaptativo de captura:', error));
+  tuneAllSenders();
+}
+async function checkEncoderPressure() {
+  if (!screenStream || statsBusy) return;
+  statsBusy = true;
+  try {
+    let limitedByCpu = false;
+    {
+      const sender = publisherPc?.getSenders().find(item => item.track?.kind === 'video');
+      if (!sender?.track) return;
+      const stats = await sender.getStats();
+      for (const report of stats.values()) {
+        if (report.type === 'outbound-rtp' && (report.kind === 'video' || report.mediaType === 'video') && report.qualityLimitationReason === 'cpu') {
+          limitedByCpu = true;
+          break;
+        }
+      }
+    }
+    if (limitedByCpu) {
+      cpuPressureSamples += 1; healthySamples = 0;
+      if (!cpuLimited && cpuPressureSamples >= 2) {
+        cpuLimited = true;
+        notify('Reduzi a carga da transmissão para ajudar o jogo a manter FPS.');
+        tuneCaptureProfile();
+      }
+    } else {
+      cpuPressureSamples = 0;
+      if (cpuLimited && ++healthySamples >= 20) {
+        cpuLimited = false; healthySamples = 0;
+        notify('A carga melhorou; restaurei a qualidade escolhida.');
+        tuneCaptureProfile();
+      }
+    }
+  } catch (error) { console.debug('Leitura de carga do codificador indisponível:', error); }
+  finally { statsBusy = false; }
 }
 async function chooseScreen() {
   if (captureBusy) return;
@@ -352,18 +380,31 @@ async function startScreen(source) {
   choosingScreen = false; render();
   try {
     await window.desktop.selectSource(source.id);
-    const preset = qualityPresets[quality];
-    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { width: { ideal: preset.width }, height: { ideal: preset.height }, frameRate: { ideal: preset.fps } }, audio: true });
+    const preview = screenQuality.captureProfile(false, quality);
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { width: { ideal: preview.width, max: preview.width }, height: { ideal: preview.height, max: preview.height }, frameRate: { ideal: preview.frameRate, max: preview.frameRate } }, audio: false });
     const videoTrack = screenStream.getVideoTracks()[0];
     // Para navegação, jogos e Alt+Tab, fluidez importa mais que preservar texto estático.
     videoTrack.contentHint = 'motion';
-    await videoTrack.applyConstraints(captureConstraints()).catch(error => console.warn('Limite de captura:', error));
+    await videoTrack.applyConstraints({ width: { ideal: preview.width, max: preview.width }, height: { ideal: preview.height, max: preview.height }, frameRate: { ideal: preview.frameRate, max: preview.frameRate } }).catch(error => console.warn('Limite de captura:', error));
     videoTrack.onended = stopScreen;
-    await replace('screen', videoTrack);
-    await replace('audio', screenStream.getAudioTracks()[0] || null);
-    await Promise.all([...peers.keys()].map(makeOffer));
+    const session = await sfuRequest('/sfu/session', 'POST', { role: 'publisher' });
+    const pc = new RTCPeerConnection(pcConfig); publisherPc = pc;
+    const transceiver = pc.addTransceiver(videoTrack, { direction: 'sendonly', streams: [screenStream] });
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitIceGathering(pc);
+    const publication = await sfuRequest('/sfu/publish', 'POST', {
+      sessionDescription: pc.localDescription,
+      mid: transceiver.mid
+    });
+    await pc.setRemoteDescription(publication.sessionDescription);
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed') notify('Conexão com o servidor de mídia interrompida.');
+    };
+    tuneCaptureProfile();
+    if (statsTimer) clearInterval(statsTimer);
+    statsTimer = setInterval(checkEncoderPressure, 2500);
     stateUpdate(); playSound('screen');
-    if (!screenStream.getAudioTracks().length) notify('Tela iniciada sem áudio do computador.');
+    await refreshSubscriptions();
   } catch (error) {
     console.error('Compartilhamento de tela:', error);
     if (screenStream) {
@@ -371,15 +412,19 @@ async function startScreen(source) {
       screenStream = null;
       await Promise.all([replace('screen', null), replace('audio', null)]);
     }
+    publisherPc?.close(); publisherPc = null;
     notify(`Não foi possível compartilhar: ${error.message || error.name || 'erro desconhecido'}`);
   } finally { captureBusy = false; }
 }
 async function stopScreen() {
   if (!screenStream) return;
+  if (statsTimer) clearInterval(statsTimer);
+  statsTimer = null; cpuLimited = false; cpuPressureSamples = 0; healthySamples = 0;
   const old = screenStream; screenStream = null;
   if (focusedScreenId === myId) exitFocus();
   old.getTracks().forEach(track => { track.onended = null; track.stop(); });
-  await Promise.all([replace('screen', null), replace('audio', null)]); stateUpdate(); playSound('screen');
+  publisherPc?.close(); publisherPc = null;
+  await Promise.all([replace('screen', null), replace('audio', null)]); stateUpdate(); await refreshSubscriptions(); playSound('screen');
 }
 function attachMedia() {
   for (const [id, peer] of peers) {
@@ -388,7 +433,7 @@ function attachMedia() {
     if (!audio) { audio = document.createElement('audio'); audio.dataset.audio = id; audio.autoplay = true; document.body.append(audio); }
     if (audio.srcObject !== peer.streams.audio) audio.srcObject = peer.streams.audio;
     // O loopback captura o áudio do sistema; não tocar streams remotos durante a própria transmissão evita realimentação.
-    audio.muted = !!screenStream || Boolean(focusedScreenId && focusedScreenId !== id);
+    audio.muted = !!screenStream || mutedScreens.has(id) || Boolean(focusedScreenId && focusedScreenId !== id);
     audio.volume = (volumes.get(id) ?? 100) / 100;
   }
   document.querySelectorAll('.share-video').forEach(share => { if (share.dataset.owner === myId) attachVideo(share, screenStream); });
@@ -403,11 +448,13 @@ function leave(reason = '') {
   if (connected && !reason) playSound('leave');
   connected = false; connecting = false; myId = null;
   if (pingTimer) clearInterval(pingTimer);
+  if (statsTimer) clearInterval(statsTimer);
   pingTimer = null;
+  statsTimer = null; cpuLimited = false; cpuPressureSamples = 0; healthySamples = 0;
   if (focusedScreenId) window.desktop?.setFocusMode?.(false).catch(console.error);
   focusedScreenId = null;
   if (socket) { socket.onclose = null; socket.close(); socket = null; }
-  for (const peer of peers.values()) peer.pc?.close(); peers.clear();
+  publisherPc?.close(); publisherPc = null; receiverPc?.close(); receiverPc = null; peers.clear();
   screenStream?.getTracks().forEach(track => track.stop());
   screenStream = null;
   document.querySelectorAll('audio[data-audio]').forEach(el => el.remove());

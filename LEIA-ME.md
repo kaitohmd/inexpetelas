@@ -4,9 +4,9 @@ Aplicativo privado para Windows com uma sala fixa de até 8 pessoas. Cada pessoa
 
 ## Abrir
 
-Baixe `INEXPETELAS-1.0.0.exe` na página Releases do GitHub e abra. O launcher mostra a instalação numa janela do próprio INEXPETELAS, baixa a versão atual, instala para o usuário sem pedir administrador e abre o app. Depois, o app instalado verifica atualizações e mostra o progresso numa janela INEXPETELAS. Seus amigos não precisam instalar Node.js.
+Baixe o launcher na página Releases do GitHub e abra. A janela própria do INEXPETELAS aparece antes de procurar atualizações; na primeira execução, use **Instalar e abrir**. Ele baixa a versão atual, instala para o usuário sem pedir administrador e abre o app. Depois, o app instalado também verifica atualizações. Seus amigos não precisam instalar Node.js.
 
-Para gerar o instalador a partir do código no Windows: `npm ci` e `npm run dist`. O resultado fica em `dist/`. Para desenvolvimento, use `npm start`.
+Para gerar o app/instalador a partir do código no Windows: `npm ci` e `npm run dist`. Para gerar a janelinha launcher independente e leve: `npm run dist:launcher`; o resultado fica em `installer/dist/INEXPETELAS.exe`. Para desenvolvimento, use `npm start`.
 
 ## Usar
 
@@ -18,7 +18,7 @@ Enquanto você transmite, o app deixa de reproduzir o áudio de transmissões re
 
 O app já vem configurado para `wss://inexpetelas.squareweb.app`. Não é necessário configurar o servidor em cada PC. O código de acesso está embutido no cliente; quem obtiver o app ou o código-fonte pode entrar na sala.
 
-Na Square Cloud, mantenha `ROOM_KEY`, o subdomínio `inexpetelas`, 512 MB e `node server.js` como inicialização. `GITHUB_TOKEN` é opcional: como o repositório é público, a ponte `/updates/` pode buscar a Release mais recente sem token. Ela autentica os clientes usando `ROOM_KEY`.
+Na Square Cloud, mantenha `ROOM_KEY`, o subdomínio `inexpetelas`, 512 MB e `node server.js` como inicialização. Configure também `REALTIME_SFU_APP_ID` e `REALTIME_SFU_API_TOKEN` como variáveis privadas do servidor. Nunca coloque o token da Cloudflare no app, no `.exe` ou no GitHub. `GITHUB_TOKEN` é opcional: como o repositório é público, a ponte `/updates/` pode buscar a Release mais recente sem token. Ela autentica os clientes usando `ROOM_KEY`.
 
 Para publicar outra versão do app: aumente `version` no `package.json`, gere com `npm run dist`, crie uma Release no GitHub com a tag correspondente e anexe o instalador, `.blockmap` e `latest.yml` produzidos em `dist/`. Para atualizar o launcher, rode `npm run dist:launcher` e anexe o `.exe` de `installer/dist/`. A integração da Square faz deploy quando `server.js` muda em `main`.
 
@@ -26,8 +26,10 @@ Para publicar outra versão do app: aumente `version` no `package.json`, gere co
 
 A grade acomoda de uma a oito pessoas mantendo a proporção das prévias. Clique numa transmissão para abrir em tela cheia; mova o mouse para mostrar os controles e pressione Esc para voltar. A imagem inteira aparece por padrão. O botão Preencher ocupa o monitor cortando bordas quando as proporções diferem; Ajustar restaura a imagem inteira. Os botões inferiores alternam entre transmissores e o controle de volume atua na transmissão em foco.
 
-No seletor de fonte, escolha Monitores ou Janelas e a qualidade: 720p/60 (padrão), 1080p/60 ou 720p/30. O teto por espectador é de 5, 8 ou 3 Mbps respectivamente, com orçamento total de vídeo de 16 Mbps. O WebRTC pode diminuir a qualidade sob congestionamento; 60 FPS é uma meta, não uma garantia. Janelas minimizadas podem deixar de renderizar no Windows.
+No seletor de fonte, escolha Monitores ou Janelas e a qualidade: 720p/60 (padrão), 1080p/60 ou 720p/30. Enquanto ninguém assiste em destaque, envia-se só uma prévia 320×180/8 FPS. Ao abrir uma transmissão, ela sobe para a qualidade escolhida. O app também observa o relatório de carga do codificador; se o WebRTC reportar limitação de CPU por alguns segundos, reduz temporariamente a tela em destaque para 960×540/24 FPS e tenta restaurar a escolha após um período sem pressão. Isso é uma adaptação automática, não uma garantia de FPS do jogo. Com o SFU, cada transmissor envia uma única cópia da tela, independentemente do número de espectadores. Janelas minimizadas podem deixar de renderizar no Windows.
 
 Validação: `npm test` testa o encaixe de 1–8 cards em diferentes resoluções. `electron tests/media-electron.cjs` usa duas janelas isoladas e vídeo sintético para verificar negociação simultânea, recepção nos dois sentidos, persistência dos vídeos e reinício de transmissão.
 
-Vídeo e áudio são enviados diretamente entre os computadores por WebRTC. Redes restritivas podem precisar de TURN, ainda não incluído. Muitas telas ao mesmo tempo podem exigir bastante upload de quem transmite. Teste o áudio do sistema entre dois PCs Windows antes de distribuir o app.
+As telas são enviadas por WebRTC ao Cloudflare Realtime SFU, que encaminha a transmissão apenas aos participantes inscritos. A Square continua hospedando a sala, a presença e a sinalização; a mídia em tempo real passa pelo SFU da Cloudflare. O token da Cloudflare é usado exclusivamente no backend da Square. STUN ajuda a estabelecer a conexão; o uso de rede e o desempenho ainda dependem do computador de quem transmite, da conexão de internet e do tráfego de mídia.
+
+**O áudio de origem está temporariamente desativado para evitar vazamento do Discord.** O loopback geral do sistema poderia incluir o Discord, então o app não captura nem envia áudio das janelas compartilhadas nesta versão. A captura seletiva é necessária para transmitir somente o app escolhido e excluir Discord; ela depende da API Application Loopback do Windows (build 20348 ou posterior) e ainda precisa de um helper nativo e testes com janelas, monitores e diferentes instalações. Se essa captura seletiva não estiver disponível, o app deve continuar sem áudio, nunca voltar ao loopback geral.

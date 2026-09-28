@@ -75,6 +75,7 @@ body::before{content:"";position:fixed;z-index:-1;inset:0;pointer-events:none;op
 .viewer-ui .back-button{padding:10px 14px;border:1px solid #ffffff24;border-radius:12px;background:#151216e8;white-space:nowrap}
 .viewer-ui .back-button:hover{background:#3b1820}
 @media(max-width:760px){.call-body{padding:10px}.call-main{grid-template-rows:50px minmax(0,1fr) 66px}.tile-label{bottom:7px;left:7px;font-size:11px}.viewer-bottom{flex-wrap:wrap;padding:40px 14px 14px;gap:10px}.stream-switcher{max-width:100%;width:100%}.viewer-actions{margin-left:auto}.viewer-top{padding:14px 14px 36px}.source-toolbar{gap:8px}.source-tabs button{padding:9px 10px}}
+.viewer-actions #toggle-screen-audio[aria-pressed="true"]{background:#68232d;border-color:#f24960;color:#ffdce0}
 
 .update-overlay{position:fixed;z-index:40;inset:0;display:grid;place-items:center;background:#080709eF;backdrop-filter:blur(14px);animation:update-fade .2s ease-out}
 .update-card{display:flex;flex-direction:column;align-items:center;gap:18px;width:min(330px,calc(100vw - 36px));padding:36px 30px;border:1px solid #5a2933;border-radius:22px;background:linear-gradient(145deg,#1c1418,#0e0c0f);box-shadow:0 28px 90px #000c,0 0 38px #ce263520;text-align:center;animation:update-card-in .25s ease-out}

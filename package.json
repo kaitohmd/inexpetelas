@@ -10,7 +10,7 @@
     "dev": "electron .",
     "server": "node server.js",
     "dist": "electron-builder --win nsis --x64",
-    "dist:launcher": "electron-builder --projectDir installer --win portable --x64",
+    "dist:launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File installer-native/build.ps1",
     "test": "node --test tests/*.test.cjs"
   },
   "dependencies": {
@@ -33,6 +33,7 @@
       "index.html",
       "styles.css",
       "screen-layout.js",
+      "screen-quality.js",
       "assets/**/*",
       "package.json"
     ],
