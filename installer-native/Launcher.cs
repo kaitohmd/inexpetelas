@@ -56,7 +56,7 @@ internal sealed class LauncherForm : Form
         ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
         var client = new HttpClient();
         client.Timeout = TimeSpan.FromSeconds(20);
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("INEXPETELAS-Launcher/1.2");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("INEXPETELAS-Launcher/1.3");
         client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         return client;
     }
@@ -207,6 +207,19 @@ internal sealed class LauncherForm : Form
 
     private async Task<ReleaseInfo> GetLatestReleaseAsync(CancellationToken token)
     {
+        Exception apiError;
+        try { return await GetLatestReleaseFromApiAsync(token); }
+        catch (Exception error)
+        {
+            token.ThrowIfCancellationRequested();
+            apiError = error;
+        }
+        try { return await GetLatestReleaseFromManifestAsync(token); }
+        catch (Exception error) { throw new AggregateException("Não consegui consultar nem a API nem o manifesto público.", apiError, error); }
+    }
+
+    private async Task<ReleaseInfo> GetLatestReleaseFromApiAsync(CancellationToken token)
+    {
         var url = "https://api.github.com/repos/" + RepositoryOwner + "/" + Repository + "/releases/latest";
         using (var response = await Http.GetAsync(url, HttpCompletionOption.ResponseContentRead, token))
         {
@@ -230,6 +243,26 @@ internal sealed class LauncherForm : Form
                 return new ReleaseInfo { Version = parsed, Tag = tag, Name = name, Url = Convert.ToString(asset["browser_download_url"]) };
             }
             throw new InvalidOperationException("O instalador ainda não está disponível nesta versão.");
+        }
+    }
+
+    private async Task<ReleaseInfo> GetLatestReleaseFromManifestAsync(CancellationToken token)
+    {
+        // Some networks block api.github.com or its unauthenticated rate limit.
+        // The public latest.yml attached to the latest release provides the same
+        // version and installer name without requiring the GitHub API.
+        var url = "https://github.com/" + RepositoryOwner + "/" + Repository + "/releases/latest/download/latest.yml";
+        using (var response = await Http.GetAsync(url, HttpCompletionOption.ResponseContentRead, token))
+        {
+            response.EnsureSuccessStatusCode();
+            string manifest = await response.Content.ReadAsStringAsync();
+            string versionText = Regex.Match(manifest, @"(?m)^version:\s*([0-9.]+)\s*$").Groups[1].Value.Trim();
+            string installerName = Regex.Match(manifest, @"(?m)^path:\s*([^\r\n]+)").Groups[1].Value.Trim();
+            Version parsed;
+            if (!Version.TryParse(versionText, out parsed) || !Regex.IsMatch(installerName, @"^INEXPETELAS-Setup-[\w.-]+\.exe$"))
+                throw new InvalidOperationException("O manifesto público da versão não está válido.");
+            var download = "https://github.com/" + RepositoryOwner + "/" + Repository + "/releases/latest/download/" + Uri.EscapeDataString(installerName);
+            return new ReleaseInfo { Version = parsed, Tag = "v" + parsed, Name = installerName, Url = download };
         }
     }
 
