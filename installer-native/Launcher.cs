@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -50,9 +51,12 @@ internal sealed class LauncherForm : Form
 
     private static HttpClient CreateHttpClient()
     {
+        // The launcher targets .NET Framework 4.x, whose default TLS policy can
+        // negotiate TLS 1.0 on older Windows installs. GitHub requires TLS 1.2+.
+        ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
         var client = new HttpClient();
         client.Timeout = TimeSpan.FromSeconds(20);
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("INEXPETELAS-Launcher/1.1");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("INEXPETELAS-Launcher/1.2");
         client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         return client;
     }
@@ -197,7 +201,7 @@ internal sealed class LauncherForm : Form
             BeginLaunch("Instalação concluída. Abrindo o INEXPETELAS…");
         }
         catch (OperationCanceledException) { }
-        catch (Exception error) { ShowInstallError(error.Message); }
+        catch (Exception error) { ShowInstallError(error.GetBaseException().Message); }
         finally { busy = false; }
     }
 
