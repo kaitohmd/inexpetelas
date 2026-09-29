@@ -20,7 +20,7 @@ if (config.version !== bundledConfig.version) {
   config = bundledConfig;
   localStorage.setItem('call-config', JSON.stringify(config));
 }
-let socket, myId, screenStream, publisherPc, receiverPc, receiverQueue = Promise.resolve(), joinTimeout = null;
+let socket, myId, screenStream, publisherPc, receiverPc, warmedReceiverPc, receiverQueue = Promise.resolve(), joinTimeout = null;
 const sfuMidOwners = new Map();
 let connecting = false, connected = false, choosingScreen = false;
 let message = '', peers = new Map();
@@ -56,7 +56,7 @@ function playSound(name) {
   audio.play().catch(() => {});
   return audio;
 }
-const pcConfig = { iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] };
+const pcConfig = { iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }], iceCandidatePoolSize: 1 };
 function sfuBase() { return config.url.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/$/, ''); }
 async function sfuRequest(path, method = 'POST', payload = {}) {
   const response = await fetch(`${sfuBase()}${path}`, {
@@ -71,10 +71,22 @@ async function sfuRequest(path, method = 'POST', payload = {}) {
 function waitIceGathering(pc) {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
   return new Promise(resolve => {
-    const done = () => { if (pc.iceGatheringState === 'complete') { pc.removeEventListener('icegatheringstatechange', done); resolve(); } };
+    let timeout;
+    const finish = () => {
+      pc.removeEventListener('icegatheringstatechange', done);
+      clearTimeout(timeout);
+      resolve();
+    };
+    const done = () => { if (pc.iceGatheringState === 'complete') finish(); };
     pc.addEventListener('icegatheringstatechange', done);
-    setTimeout(resolve, 8000);
+    timeout = setTimeout(finish, 8000);
   });
+}
+function preparePublisherConnection() {
+  if (connected && !screenStream && !publisherPc) publisherPc = new RTCPeerConnection(pcConfig);
+}
+function prepareReceiverConnection() {
+  if (connected && !warmedReceiverPc) warmedReceiverPc = new RTCPeerConnection(pcConfig);
 }
 
 function avatar(person, extra = '') {
@@ -267,6 +279,8 @@ function handleMessage(data) {
     for (const person of data.peers) peers.set(person.id, { profile: person, streams: { audio: new MediaStream(), screen: new MediaStream() } });
     render();
     playSound('join');
+    preparePublisherConnection();
+    prepareReceiverConnection();
     requestPing(); pingTimer = setInterval(requestPing, 5000);
     refreshSubscriptions();
   } else if (data.type === 'pong') {
@@ -293,9 +307,12 @@ async function refreshSubscriptions() {
     const publications = [...peers.entries()].filter(([, peer]) => peer.profile.screen).map(([memberId]) => ({ memberId }));
     receiverPc?.close(); receiverPc = null; sfuMidOwners.clear();
     for (const peer of peers.values()) peer.streams.screen = new MediaStream();
-    if (!publications.length) { attachMedia(); render(); return; }
-    const session = await sfuRequest('/sfu/session', 'POST', { role: 'subscriber' });
-    const pc = new RTCPeerConnection(pcConfig); receiverPc = pc;
+    if (!publications.length) { attachMedia(); render(); prepareReceiverConnection(); return; }
+    const sessionPromise = sfuRequest('/sfu/session', 'POST', { role: 'subscriber' });
+    sessionPromise.catch(() => {});
+    const pc = warmedReceiverPc || new RTCPeerConnection(pcConfig);
+    warmedReceiverPc = null;
+    receiverPc = pc;
     pc.ontrack = event => {
       const ownerId = sfuMidOwners.get(event.transceiver.mid);
       const peer = peers.get(ownerId);
@@ -305,15 +322,17 @@ async function refreshSubscriptions() {
       event.track.onended = () => { peer.streams.screen.removeTrack(event.track); render(); };
       attachMedia();
     };
+    await sessionPromise;
     const response = await sfuRequest('/sfu/subscribe', 'POST', { publications });
     for (const track of response.tracks || []) if (track.mid && track.ownerId) sfuMidOwners.set(String(track.mid), track.ownerId);
-    if (!response.sessionDescription) { pc.close(); receiverPc = null; return; }
+    if (!response.sessionDescription) { pc.close(); receiverPc = null; prepareReceiverConnection(); return; }
     await pc.setRemoteDescription(response.sessionDescription);
     await pc.setLocalDescription(await pc.createAnswer());
     await waitIceGathering(pc);
     await sfuRequest('/sfu/renegotiate', 'PUT', { sessionDescription: pc.localDescription });
     attachMedia(); render();
-  }).catch(error => { console.error('Assinatura SFU:', error); notify('Não foi possível abrir a transmissão.'); });
+    prepareReceiverConnection();
+  }).catch(error => { console.error('Assinatura SFU:', error); receiverPc?.close(); receiverPc = null; prepareReceiverConnection(); notify('Não foi possível abrir a transmissão.'); });
   return receiverQueue;
 }
 async function replace(kind, track) {
@@ -381,27 +400,30 @@ async function checkEncoderPressure() {
 async function chooseScreen() {
   if (captureBusy) return;
   if (screenStream) return stopScreen();
+  preparePublisherConnection();
   try { sources = await window.desktop.sources(); choosingScreen = true; render(); }
-  catch { notify('Não foi possível listar as telas.'); }
+  catch { publisherPc?.close(); publisherPc = null; notify('Não foi possível listar as telas.'); }
 }
 async function startScreen(source) {
   if (captureBusy || !source) return;
   captureBusy = true;
   choosingScreen = false; render();
   try {
-    await window.desktop.selectSource(source.id);
+    const selected = await window.desktop.selectSource(source.id);
+    if (!selected) throw new Error('A janela mudou. Feche e abra a lista de telas novamente.');
+    const sessionPromise = sfuRequest('/sfu/session', 'POST', { role: 'publisher' });
+    sessionPromise.catch(() => {});
     const capture = screenQuality.captureProfile(false, quality);
     screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { width: { ideal: capture.width, max: capture.width }, height: { ideal: capture.height, max: capture.height }, frameRate: { ideal: capture.frameRate, max: capture.frameRate } }, audio: false });
     const videoTrack = screenStream.getVideoTracks()[0];
     // Para navegação, jogos e Alt+Tab, fluidez importa mais que preservar texto estático.
     videoTrack.contentHint = 'motion';
-    await videoTrack.applyConstraints({ width: { ideal: capture.width, max: capture.width }, height: { ideal: capture.height, max: capture.height }, frameRate: { ideal: capture.frameRate, max: capture.frameRate } }).catch(error => console.warn('Limite de captura:', error));
     videoTrack.onended = stopScreen;
-    const session = await sfuRequest('/sfu/session', 'POST', { role: 'publisher' });
-    const pc = new RTCPeerConnection(pcConfig); publisherPc = pc;
+    const pc = publisherPc || new RTCPeerConnection(pcConfig); publisherPc = pc;
     const transceiver = pc.addTransceiver(videoTrack, { direction: 'sendonly', streams: [screenStream] });
     await pc.setLocalDescription(await pc.createOffer());
     await waitIceGathering(pc);
+    await sessionPromise;
     const publication = await sfuRequest('/sfu/publish', 'POST', {
       sessionDescription: pc.localDescription,
       mid: transceiver.mid
@@ -414,7 +436,7 @@ async function startScreen(source) {
     if (statsTimer) clearInterval(statsTimer);
     statsTimer = setInterval(checkEncoderPressure, 2500);
     stateUpdate(); playSound('screen');
-    await refreshSubscriptions();
+    void refreshSubscriptions();
   } catch (error) {
     console.error('Compartilhamento de tela:', error);
     if (screenStream) {
@@ -423,6 +445,7 @@ async function startScreen(source) {
       await Promise.all([replace('screen', null), replace('audio', null)]);
     }
     publisherPc?.close(); publisherPc = null;
+    preparePublisherConnection();
     notify(`Não foi possível compartilhar: ${error.message || error.name || 'erro desconhecido'}`);
   } finally { captureBusy = false; }
 }
@@ -434,7 +457,7 @@ async function stopScreen() {
   if (focusedScreenId === myId) exitFocus();
   old.getTracks().forEach(track => { track.onended = null; track.stop(); });
   publisherPc?.close(); publisherPc = null;
-  await Promise.all([replace('screen', null), replace('audio', null)]); stateUpdate(); await refreshSubscriptions(); playSound('screen');
+  await Promise.all([replace('screen', null), replace('audio', null)]); preparePublisherConnection(); stateUpdate(); void refreshSubscriptions(); playSound('screen');
 }
 function attachMedia() {
   for (const [id, peer] of peers) {
@@ -466,7 +489,7 @@ function leave(reason = '') {
   if (focusedScreenId) window.desktop?.setFocusMode?.(false).catch(console.error);
   focusedScreenId = null;
   if (socket) { socket.onclose = null; socket.close(); socket = null; }
-  publisherPc?.close(); publisherPc = null; receiverPc?.close(); receiverPc = null; peers.clear();
+  publisherPc?.close(); publisherPc = null; receiverPc?.close(); receiverPc = null; warmedReceiverPc?.close(); warmedReceiverPc = null; peers.clear();
   screenStream?.getTracks().forEach(track => track.stop());
   screenStream = null;
   document.querySelectorAll('audio[data-audio]').forEach(el => el.remove());

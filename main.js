@@ -2,6 +2,7 @@ const { app, BrowserWindow, desktopCapturer, ipcMain, session } = require('elect
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 let selectedSource = null;
+let availableSources = new Map();
 let mainWindow = null;
 const updateKey = '698df1b771e65277936172ef0e1738b001193440dba5e4c1';
 // A versão instalada deve comunicar o estado assim que abrir, sem parecer travada.
@@ -10,10 +11,14 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // A transmissão continua em tempo real mesmo quando o INEXPETELAS perde foco.
 
 ipcMain.handle('screen:sources', async () => {
-  const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 200, height: 112 } });
+  const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 144, height: 81 } });
+  availableSources = new Map(sources.map(source => [source.id, source]));
   return sources.map(source => ({ id: source.id, name: source.name, thumbnail: source.thumbnail.toDataURL() }));
 });
-ipcMain.handle('screen:select', (_event, id) => { selectedSource = id; });
+ipcMain.handle('screen:select', (_event, id) => {
+  selectedSource = availableSources.get(id) || null;
+  return Boolean(selectedSource);
+});
 ipcMain.handle('app:version', () => app.getVersion());
 ipcMain.handle('window:focus-screen', (event, enabled) => {
   const window = BrowserWindow.fromWebContents(event.sender);
@@ -91,8 +96,7 @@ app.whenReady().then(() => {
     callback(permission === 'display-capture' || (permission === 'media' && selectedSource !== null));
   });
   session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
-    const sources = await desktopCapturer.getSources({ types: ['screen', 'window'] });
-    const source = sources.find(item => item.id === selectedSource);
+    const source = selectedSource;
     selectedSource = null;
     // Não usar 'loopback' aqui: no Windows isso mistura o áudio de todos os aplicativos.
     // O áudio fica fail-closed até a captura nativa por processo ser integrada e validada.

@@ -69,8 +69,6 @@ async function handleSfuRequest(req, res) {
         sessionDescription: input.sessionDescription,
         tracks: [{ location: 'local', mid, trackName: 'screen' }]
       });
-      member.profile.screen = true;
-      broadcast({ type: 'state', id: input.memberId, screen: true }, member);
       return reply(200, result);
     }
     if (route === '/sfu/subscribe' && req.method === 'POST') {
