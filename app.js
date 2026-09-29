@@ -339,12 +339,9 @@ function tuneAllSenders() {
   return sender ? tuneScreenSender(sender, hasFocusedViewer) : Promise.resolve();
 }
 function tuneCaptureProfile() {
-  const track = screenStream?.getVideoTracks()[0];
-  if (!track) return;
-  const hasFocusedViewer = focusedScreenId === myId || [...peers.values()].some(peer => peer.profile.watching === myId);
-  const preset = screenQuality.captureProfile(hasFocusedViewer, quality, cpuLimited);
-  track.applyConstraints({ width: { ideal: preset.width, max: preset.width }, height: { ideal: preset.height, max: preset.height }, frameRate: { ideal: preset.frameRate, max: preset.frameRate } })
-    .catch(error => console.warn('Ajuste adaptativo de captura:', error));
+  if (!screenStream) return;
+  // Keep the original capture track capable of the selected quality. Chromium
+  // does not reliably restore a track after applying a lower max constraint.
   tuneAllSenders();
 }
 async function checkEncoderPressure() {
@@ -393,12 +390,12 @@ async function startScreen(source) {
   choosingScreen = false; render();
   try {
     await window.desktop.selectSource(source.id);
-    const preview = screenQuality.captureProfile(false, quality);
-    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { width: { ideal: preview.width, max: preview.width }, height: { ideal: preview.height, max: preview.height }, frameRate: { ideal: preview.frameRate, max: preview.frameRate } }, audio: false });
+    const capture = screenQuality.captureProfile(false, quality);
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { width: { ideal: capture.width, max: capture.width }, height: { ideal: capture.height, max: capture.height }, frameRate: { ideal: capture.frameRate, max: capture.frameRate } }, audio: false });
     const videoTrack = screenStream.getVideoTracks()[0];
     // Para navegação, jogos e Alt+Tab, fluidez importa mais que preservar texto estático.
     videoTrack.contentHint = 'motion';
-    await videoTrack.applyConstraints({ width: { ideal: preview.width, max: preview.width }, height: { ideal: preview.height, max: preview.height }, frameRate: { ideal: preview.frameRate, max: preview.frameRate } }).catch(error => console.warn('Limite de captura:', error));
+    await videoTrack.applyConstraints({ width: { ideal: capture.width, max: capture.width }, height: { ideal: capture.height, max: capture.height }, frameRate: { ideal: capture.frameRate, max: capture.frameRate } }).catch(error => console.warn('Limite de captura:', error));
     videoTrack.onended = stopScreen;
     const session = await sfuRequest('/sfu/session', 'POST', { role: 'publisher' });
     const pc = new RTCPeerConnection(pcConfig); publisherPc = pc;
