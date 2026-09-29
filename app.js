@@ -20,7 +20,7 @@ if (config.version !== bundledConfig.version) {
   config = bundledConfig;
   localStorage.setItem('call-config', JSON.stringify(config));
 }
-let socket, myId, screenStream, publisherPc, receiverPc, receiverQueue = Promise.resolve();
+let socket, myId, screenStream, publisherPc, receiverPc, receiverQueue = Promise.resolve(), joinTimeout = null;
 const sfuMidOwners = new Map();
 let connecting = false, connected = false, choosingScreen = false;
 let message = '', peers = new Map();
@@ -106,6 +106,7 @@ let updateView = { status: 'idle' };
 function updateMarkup() {
   if (updateView.status === 'idle') return '';
   if (updateView.status === 'downloaded') return `<div class="update-overlay"><section class="update-card"><div class="update-mark">${icon('screen',32)}</div><strong>Atualização pronta</strong><button class="join-button" id="install-update">Reiniciar e atualizar</button></section></div>`;
+  if (updateView.status === 'error') return `<div class="update-overlay"><section class="update-card"><div class="update-mark">${icon('screen',32)}</div><strong>Não consegui verificar atualizações</strong><span class="update-error-detail">O app vai abrir normalmente. Confira sua conexão e tente de novo mais tarde.</span><button class="join-button" id="dismiss-update">Continuar</button></section></div>`;
   const checking = updateView.status === 'checking';
   const percent = Math.max(0, Math.min(100, updateView.percent || 0));
   return `<div class="update-overlay"><section class="update-card"><div class="update-mark ${checking ? 'is-checking' : ''}">${icon('screen',32)}</div><strong>${checking ? 'Verificando atualizações' : 'Atualizando'}${checking ? '…' : ` · ${percent}%`}</strong>${checking ? '' : `<div class="update-progress"><span style="width:${percent}%"></span></div>`}</section></div>`;
@@ -165,6 +166,7 @@ function sourceMarkup() {
 }
 function bind() {
   document.querySelector('#install-update')?.addEventListener('click', () => window.desktop?.installUpdate?.());
+  document.querySelector('#dismiss-update')?.addEventListener('click', () => { updateView = { status: 'idle' }; render(); });
   document.querySelector('#join')?.addEventListener('click', join);
   document.querySelector('#name')?.addEventListener('input', event => { profile.name = event.target.value; localStorage.setItem('call-profile', JSON.stringify(profile)); });
   document.querySelector('#name')?.addEventListener('keydown', event => { if (event.key === 'Enter') join(); });
@@ -238,19 +240,29 @@ async function join() {
   message = ''; connecting = true; render();
   try {
     socket = new WebSocket(config.url);
+    joinTimeout = setTimeout(() => {
+      if (!connecting) return;
+      message = 'O servidor demorou para responder. Confira sua internet e tente novamente.';
+      connecting = false; render(); socket?.close();
+    }, 15000);
     socket.onopen = () => socket.send(JSON.stringify({ type: 'join', name: profile.name, photo: profile.photo.length <= 12000 ? profile.photo : '', key: config.key }));
     socket.onmessage = event => handleMessage(JSON.parse(event.data));
     socket.onclose = event => {
+      if (joinTimeout) clearTimeout(joinTimeout);
+      joinTimeout = null;
       if (connected || connecting) {
-        const reason = event.reason || 'Não foi possível conectar ao servidor.';
+        const knownReasons = { 4001: 'O servidor demorou para responder. Tente novamente.', 4002: 'Digite seu nome para entrar.', 4003: 'Código da sala incorreto.', 4008: 'A sala já está cheia.' };
+        const reason = knownReasons[event.code] || event.reason || 'Não foi possível conectar à sala. Confira sua internet.';
         leave(reason);
       }
     };
-    socket.onerror = () => { if (connecting) { message = 'Não foi possível entrar na sala.'; connecting = false; render(); } };
+    socket.onerror = () => { if (connecting) { message = 'Falha de conexão. Verificando o motivo…'; render(); } };
   } catch { connecting = false; message = 'Endereço do servidor inválido.'; render(); }
 }
 function handleMessage(data) {
   if (data.type === 'welcome') {
+    if (joinTimeout) clearTimeout(joinTimeout);
+    joinTimeout = null;
     myId = data.id; connecting = false; connected = true;
     for (const person of data.peers) peers.set(person.id, { profile: person, streams: { audio: new MediaStream(), screen: new MediaStream() } });
     render();
@@ -446,6 +458,8 @@ function attachVideo(video, stream) {
   else video.onloadedmetadata = play;
 }
 function leave(reason = '') {
+  if (joinTimeout) clearTimeout(joinTimeout);
+  joinTimeout = null;
   if (connected && !reason) playSound('leave');
   connected = false; connecting = false; myId = null;
   if (pingTimer) clearInterval(pingTimer);

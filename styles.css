@@ -84,5 +84,6 @@ body::before{content:"";position:fixed;z-index:-1;inset:0;pointer-events:none;op
 .update-mark{display:grid;place-items:center;width:76px;height:76px;border:1px solid #812e3c;border-radius:23px;background:linear-gradient(145deg,#481824,#1c1015);color:#ff5364;box-shadow:0 0 32px #df293c44}
 .update-mark.is-checking{animation:mark-pulse 1.6s ease-in-out infinite}
 .update-card .join-button{max-width:240px;padding:0 18px}
+.update-error-detail{max-width:320px;color:#b7b4b8;font-size:12px;line-height:1.5;text-align:center}
 .update-progress{width:100%;height:5px;overflow:hidden;border-radius:8px;background:#352127}.update-progress>span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#ad1f34,#ff5364);box-shadow:0 0 12px #ff5364;transition:width .2s}
 @keyframes update-fade{from{opacity:0}to{opacity:1}}@keyframes update-card-in{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}

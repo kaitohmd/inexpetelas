@@ -7,8 +7,8 @@
     sharp: { label: '1080p · 60 FPS', width: 1920, height: 1080, fps: 60, bitrate: 8_000_000 },
     light: { label: '720p · 30 FPS', width: 1280, height: 720, fps: 30, bitrate: 3_000_000 }
   };
-  // Keep un-focused shares light; the selected viewer's focus request promotes it.
-  const preview = { width: 320, height: 180, fps: 8, bitrate: 220_000 };
+  // Keep previews efficient, but clear and fluid enough to inspect before fullscreen.
+  const preview = { width: 640, height: 360, fps: 15, bitrate: 800_000 };
   const cpuSaver = { width: 960, height: 540, fps: 24, bitrate: 1_800_000 };
   const maxUpstreamBitrate = 8_000_000;
 
@@ -22,7 +22,7 @@
       // With an SFU, the sender uploads one copy regardless of how many people watch.
       maxBitrate: Math.min(selected.bitrate, maxUpstreamBitrate),
       scaleResolutionDownBy: 1,
-      priority: focused ? 'high' : 'very-low'
+      priority: focused ? 'high' : 'low'
     };
   }
 

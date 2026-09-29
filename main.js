@@ -51,7 +51,7 @@ if (app.isPackaged) {
   autoUpdater.on('update-not-available', () => publishUpdateState({ status: 'idle' }));
   autoUpdater.on('error', error => {
     console.error('Atualização:', error.message);
-    publishUpdateState({ status: 'idle' });
+    publishUpdateState({ status: 'error' });
   });
 }
 
